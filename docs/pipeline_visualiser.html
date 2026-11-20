@@ -1,0 +1,932 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Group 19 Pipeline Visualiser</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: a logic-analyser bench. Left rail = program + run modes; main = stage strip, what the hardware does this cycle, then the full timing grid. */
+:root {
+  --bg: #EEF1F4; --surface: #FFFFFF; --ink: #141A21; --muted: #586472; --line: #D3DAE1; --soft: #F6F8FA;
+  --accent: #1F5EDB;
+  --sF: #3567D6; --sD: #11867A; --sE: #B8720B; --sM: #8448C4; --sW: #3E8536;
+  --fwd: #0B7FA8; --stall: #B8720B; --flush: #C23B32; --good: #2E8540;
+  --font-sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0E1217; --surface: #161C23; --ink: #E6EBF0; --muted: #96A3B0; --line: #29323C; --soft: #1C232B;
+  --accent: #6E9CFF;
+  --sF: #6F95EE; --sD: #3CC0B0; --sE: #E3A13A; --sM: #B184EA; --sW: #74BE68;
+  --fwd: #4CC3EC; --stall: #E3A13A; --flush: #F07068; --good: #6CC57E; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #0E1217; --surface: #161C23; --ink: #E6EBF0; --muted: #96A3B0; --line: #29323C; --soft: #1C232B;
+  --accent: #6E9CFF;
+  --sF: #6F95EE; --sD: #3CC0B0; --sE: #E3A13A; --sM: #B184EA; --sW: #74BE68;
+  --fwd: #4CC3EC; --stall: #E3A13A; --flush: #F07068; --good: #6CC57E; color-scheme: dark; }
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-sans); font-size: 15px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.wrap { max-width: 1240px; margin: 0 auto; padding-block: 24px 48px; display: flex; flex-direction: column; gap: 18px; }
+header h1 { font-size: 1.6rem; margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+header p { margin: 4px 0 0; color: var(--muted); max-width: 72ch; }
+.mono { font-family: var(--font-mono); }
+.label { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
+
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; border-bottom: 1px solid var(--line); }
+.tab { appearance: none; border: 0; background: none; font: inherit; font-weight: 600; color: var(--muted); padding: 10px 14px; cursor: pointer; border-bottom: 3px solid transparent; margin-bottom: -1px; }
+.tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.tab:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.bench { display: grid; grid-template-columns: minmax(0, 330px) minmax(0, 1fr); gap: 18px; align-items: start; }
+@media (max-width: 860px) { .bench { grid-template-columns: minmax(0, 1fr); } }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.rail { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.main { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+
+/* program listing */
+.prog { font-family: var(--font-mono); font-size: .82rem; display: flex; flex-direction: column; max-height: 360px; overflow: auto; }
+.pl { display: grid; grid-template-columns: 74px 1fr auto; gap: 8px; padding: 2px 6px; border-radius: 4px; align-items: center; }
+.pl .pc { color: var(--muted); }
+.pl.nop .txt { color: var(--muted); }
+.pl .lbl { color: var(--accent); }
+.pl.live { background: var(--soft); }
+.chips { display: flex; gap: 3px; }
+.chip { font-size: .66rem; font-weight: 600; padding: 0 5px; border-radius: 3px; color: #fff; line-height: 1.5; }
+
+/* modes */
+.modes { display: flex; flex-direction: column; gap: 8px; }
+.mode { appearance: none; text-align: left; font: inherit; background: var(--soft); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; cursor: pointer; color: var(--ink); display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; }
+.mode .mname { font-weight: 600; }
+.mode .mdesc { grid-column: 1 / -1; color: var(--muted); font-size: .82rem; }
+.mode .mcyc { font-family: var(--font-mono); font-weight: 600; font-variant-numeric: tabular-nums; }
+.mode .bar { grid-column: 1 / -1; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.mode .bar i { display: block; height: 100%; background: var(--muted); }
+.mode[aria-pressed="true"] { border-color: var(--accent); background: var(--surface); box-shadow: 0 0 0 1px var(--accent) inset; }
+.mode[aria-pressed="true"] .bar i { background: var(--accent); }
+
+/* controls */
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.btn { appearance: none; font: inherit; font-weight: 600; border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 7px; padding: 7px 12px; cursor: pointer; min-width: 44px; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn:disabled { opacity: .45; cursor: default; }
+.cyc { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 1.05rem; margin-left: auto; }
+.cyc b { font-size: 1.4rem; }
+input[type=range] { flex: 1 1 200px; accent-color: var(--accent); min-width: 140px; }
+
+/* stage strip */
+.strip { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 560px) { .strip { grid-template-columns: repeat(5, minmax(108px, 1fr)); overflow-x: auto; } .stripwrap { overflow-x: auto; } }
+.stage { border: 1px solid var(--line); border-top: 4px solid var(--c); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 6px; min-height: 128px; background: color-mix(in srgb, var(--c) 6%, var(--surface)); }
+.stage .sh { display: flex; align-items: baseline; gap: 6px; }
+.stage .sl { font-family: var(--font-mono); font-weight: 700; font-size: 1.3rem; color: var(--c); }
+.stage .sn { font-size: .76rem; color: var(--muted); }
+.stage .ins { font-family: var(--font-mono); font-size: .8rem; word-break: break-word; }
+.stage .ins.empty { color: var(--muted); font-style: italic; }
+.stage.bubble { border-style: dashed; background: var(--soft); }
+.stage.src { box-shadow: 0 0 0 2px var(--fwd) inset; }
+.tag { font-size: .7rem; font-weight: 600; border-radius: 4px; padding: 1px 6px; align-self: flex-start; }
+.tag.fwd { background: color-mix(in srgb, var(--fwd) 16%, transparent); color: var(--fwd); }
+.tag.stall { background: color-mix(in srgb, var(--stall) 18%, transparent); color: var(--stall); }
+.tag.flush { background: color-mix(in srgb, var(--flush) 16%, transparent); color: var(--flush); }
+.tag.good { background: color-mix(in srgb, var(--good) 16%, transparent); color: var(--good); }
+
+/* events */
+.events { display: flex; flex-direction: column; gap: 12px; }
+.ev { border-left: 4px solid var(--k); padding: 2px 0 2px 12px; display: flex; flex-direction: column; gap: 6px; border-radius: 0; }
+.ev .eh { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ev .kind { font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--k); }
+.ev .file { font-family: var(--font-mono); font-size: .72rem; color: var(--muted); }
+.ev p { margin: 0; max-width: 75ch; }
+pre.code { margin: 0; font-family: var(--font-mono); font-size: .76rem; background: var(--soft); border: 1px solid var(--line); border-radius: 6px; padding: 8px 0; overflow-x: auto; line-height: 1.55; }
+pre.code span { display: block; padding: 0 12px; white-space: pre; }
+pre.code span.hl { background: color-mix(in srgb, var(--k) 18%, transparent); box-shadow: 3px 0 0 var(--k) inset; }
+.quiet { color: var(--muted); margin: 0; }
+
+/* stats + BTB */
+.stats { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
+.stat { background: var(--soft); border-radius: 7px; padding: 8px 10px; }
+.stat b { display: block; font-family: var(--font-mono); font-size: 1.2rem; font-variant-numeric: tabular-nums; }
+.stat span { font-size: .76rem; color: var(--muted); }
+.btb .row { display: grid; grid-template-columns: 70px 1fr; gap: 4px 10px; font-size: .85rem; }
+.btb .row dt { color: var(--muted); }
+.btb .row dd { margin: 0; font-family: var(--font-mono); }
+.ctrs { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 6px; }
+.ctr { text-align: center; border: 1px solid var(--line); border-radius: 6px; padding: 6px 2px; font-size: .72rem; color: var(--muted); }
+.ctr b { display: block; font-family: var(--font-mono); font-size: 1rem; color: var(--ink); }
+.ctr.on { border-color: var(--k); background: color-mix(in srgb, var(--k) 14%, var(--surface)); color: var(--ink); }
+
+/* timing grid */
+.gridwrap { overflow-x: auto; }
+table.tg { border-collapse: collapse; font-family: var(--font-mono); font-size: .74rem; }
+table.tg th, table.tg td { padding: 0; text-align: center; }
+table.tg thead th { color: var(--muted); font-weight: 500; width: 26px; min-width: 26px; height: 24px; cursor: pointer; font-variant-numeric: tabular-nums; }
+table.tg thead th.now { color: var(--accent); font-weight: 700; }
+table.tg th.rowh { text-align: left; padding-right: 12px; white-space: nowrap; font-weight: 500; position: sticky; left: 0; background: var(--surface); min-width: 170px; cursor: default; }
+table.tg tr.nop th.rowh { color: var(--muted); }
+table.tg tr.flushed th.rowh { color: var(--flush); text-decoration: line-through; }
+table.tg td { width: 26px; height: 24px; border: 1px solid var(--line); }
+table.tg td.now { box-shadow: 0 0 0 2px var(--accent) inset; }
+td.s { color: #fff; font-weight: 600; }
+td.held { background-image: repeating-linear-gradient(135deg, transparent 0 4px, rgba(255,255,255,.35) 4px 7px); }
+td.x { color: var(--flush); font-weight: 700; }
+.legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: .78rem; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+/* datapath */
+.dphead { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; justify-content: space-between; }
+.dpwrap { overflow-x: auto; }
+#dp { display: block; width: 100%; min-width: 760px; height: auto; font-family: var(--font-sans); }
+#dp .rg { fill: color-mix(in srgb, var(--c) 3%, var(--surface)); stroke: var(--line); stroke-width: 1; transition: fill .25s; }
+#dp .rg.on { fill: color-mix(in srgb, var(--c) 11%, var(--surface)); stroke: color-mix(in srgb, var(--c) 55%, var(--line)); }
+#dp .rg.nop { fill: var(--soft); stroke-dasharray: 5 4; }
+#dp .hl { font-size: 15px; font-weight: 700; }
+#dp .hi { font-family: var(--font-mono); font-size: 13px; fill: var(--ink); }
+#dp .hi.dim { fill: var(--muted); font-style: italic; }
+#dp .w { stroke: var(--line); stroke-width: 1.6; marker-end: url(#ah); transition: stroke .2s; }
+#dp .w.c { stroke-dasharray: 3 3; }
+#dp .w.on { stroke: var(--k); stroke-width: 3.4; stroke-dasharray: 9 5; animation: flow .9s linear infinite; }
+#dp .w.c.on { stroke-width: 2.6; }
+@keyframes flow { to { stroke-dashoffset: -14; } }
+#dp .blk { fill: var(--surface); stroke: var(--muted); stroke-width: 1.4; transition: stroke .2s, fill .2s; }
+#dp .blk.on { stroke: var(--k); stroke-width: 2.6; fill: color-mix(in srgb, var(--k) 12%, var(--surface)); }
+#dp .hz { fill: var(--soft); }
+#dp .bar { fill: var(--line); transition: fill .2s; }
+#dp .bar.hold { fill: var(--stall); }
+#dp .bar.clr { fill: var(--flush); }
+#dp .bn { font-size: 14px; font-weight: 600; fill: var(--ink); pointer-events: none; }
+#dp .sl { font-size: 11px; fill: var(--muted); }
+#dp .sl.on { fill: var(--k); font-weight: 700; }
+#dp .bl { font-size: 11px; fill: var(--muted); text-anchor: middle; }
+#dp .bv { font-size: 11px; font-weight: 700; fill: #fff; text-anchor: middle; letter-spacing: .12em; text-transform: uppercase; }
+#dp .bt { font-size: 11px; font-weight: 700; fill: var(--stall); text-anchor: middle; }
+.dpcap { color: var(--ink); min-height: 1.5em; }
+.dpsrc { font-size: .78rem; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } #dp .w.on { animation: none; } }
+</style>
+<div class="wrap">
+  <header>
+    <div class="label">CG3207 Assignment 4 · Group 19</div>
+    <h1>Pipeline Visualiser</h1>
+    <p>Step a real instruction sequence through our 5-stage CPU, one clock cycle at a time. Each event shows the exact Verilog in <span class="mono">Hazard.v</span>, <span class="mono">RV.v</span> and <span class="mono">BranchPredictor.v</span> that makes it happen.</p>
+  </header>
+
+  <div class="tabs" role="tablist" aria-label="Enhancement">
+    <button class="tab" role="tab" id="tab-hz" aria-selected="true" data-tab="hz">Hazard unit</button>
+    <button class="tab" role="tab" id="tab-bp" aria-selected="false" data-tab="bp">Branch predictor</button>
+  </div>
+
+  <section class="panel">
+    <div class="controls">
+      <button class="btn" id="first" aria-label="First cycle">⏮</button>
+      <button class="btn" id="prev" aria-label="Previous cycle">◀</button>
+      <button class="btn primary" id="play">Play</button>
+      <button class="btn" id="next" aria-label="Next cycle">▶</button>
+      <button class="btn" id="last" aria-label="Last cycle">⏭</button>
+      <input type="range" id="scrub" min="1" max="1" value="1" aria-label="Cycle">
+      <div class="cyc">cycle <b id="cycNow">1</b> / <span id="cycTot">1</span></div>
+    </div>
+    <div class="stripwrap"><div class="strip" id="strip"></div></div>
+  </section>
+
+  <section class="panel">
+    <div class="dphead">
+      <div class="label">Datapath · what moves through the hardware this cycle</div>
+      <div class="legend">
+        <span><i class="sw" style="background:var(--fwd)"></i>forwarding</span>
+        <span><i class="sw" style="background:var(--stall)"></i>stall / hold</span>
+        <span><i class="sw" style="background:var(--flush)"></i>flush / redirect</span>
+        <span><i class="sw" style="background:var(--good)"></i>predictor</span>
+      </div>
+    </div>
+    <div class="dpwrap"><svg id="dp" viewBox="0 0 1200 600" role="img" aria-labelledby="dpTitle dpCap">
+  <title id="dpTitle">Pipelined datapath with hazard unit and branch predictor</title>
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="context-stroke"/></marker>
+  </defs>
+  <!-- stage regions -->
+  <g class="regions">
+    <rect id="rgF" class="rg" x="6" y="52" width="290" height="470" rx="8" style="--c:var(--sF)"/>
+    <rect id="rgD" class="rg" x="314" y="52" width="282" height="470" rx="8" style="--c:var(--sD)"/>
+    <rect id="rgE" class="rg" x="614" y="52" width="252" height="470" rx="8" style="--c:var(--sE)"/>
+    <rect id="rgM" class="rg" x="884" y="52" width="162" height="470" rx="8" style="--c:var(--sM)"/>
+    <rect id="rgW" class="rg" x="1064" y="52" width="130" height="470" rx="8" style="--c:var(--sW)"/>
+  </g>
+  <g class="hdr">
+    <text x="14" y="20" class="hl" style="fill:var(--sF)">F · Fetch</text><text id="hdF" x="14" y="40" class="hi">—</text>
+    <text x="322" y="20" class="hl" style="fill:var(--sD)">D · Decode</text><text id="hdD" x="322" y="40" class="hi">—</text>
+    <text x="622" y="20" class="hl" style="fill:var(--sE)">E · Execute</text><text id="hdE" x="622" y="40" class="hi">—</text>
+    <text x="892" y="20" class="hl" style="fill:var(--sM)">M · Memory</text><text id="hdM" x="892" y="40" class="hi">—</text>
+    <text x="1072" y="20" class="hl" style="fill:var(--sW)">W · Writeback</text><text id="hdW" x="1072" y="40" class="hi">—</text>
+  </g>
+
+  <!-- wires (drawn under blocks) -->
+  <g class="wires" fill="none">
+    <!-- F -->
+    <path id="w_redirect" class="w" d="M745 75 V62 H9 V262 H25" />
+    <path id="w_plus4" class="w" d="M135 275 V140 H150 M210 140 H236 V104 H17 V250 H25" />
+    <path id="w_bppred" class="w" d="M70 390 V350 H35 V318" />
+    <path id="w_muxpc" class="w" d="M45 275 H70" />
+    <path id="w_pcim" class="w" d="M120 275 H150" />
+    <path id="w_pcbp" class="w" d="M96 305 V390" />
+    <path id="w_imfd" class="w" d="M270 275 H297" />
+    <!-- D -->
+    <path id="w_fddec" class="w" d="M313 120 H340" />
+    <path id="w_fdrf" class="w" d="M313 260 H340" />
+    <path id="w_fdext" class="w" d="M313 435 H350" />
+    <path id="w_decde" class="w" d="M470 120 H597" />
+    <path id="w_rfm1" class="w" d="M480 255 H520" />
+    <path id="w_rfm2" class="w" d="M480 325 H520" />
+    <path id="w_m1de" class="w" d="M536 255 H597" />
+    <path id="w_m2de" class="w" d="M536 325 H597" />
+    <path id="w_extde" class="w" d="M470 435 H597" />
+    <!-- E -->
+    <path id="w_dema" class="w" d="M613 255 H640" />
+    <path id="w_demb" class="w" d="M613 325 H640" />
+    <path id="w_maalu" class="w" d="M656 255 H700" />
+    <path id="w_mbalu" class="w" d="M656 325 H700" />
+    <path id="w_imme" class="w" d="M613 435 H676 V340 H700" />
+    <path id="w_aluem" class="w" d="M760 300 H867" />
+    <path id="w_depcl" class="w" d="M613 100 H690" />
+    <path id="w_alupcl" class="w" d="M730 236 V125" />
+    <path id="w_bpupd" class="w" d="M800 100 H832 V196 H286 V430 H270" />
+    <!-- M -->
+    <path id="w_emdm" class="w" d="M883 300 H905" />
+    <path id="w_dmmw" class="w" d="M1020 290 H1047" />
+    <path id="w_bypass" class="w" d="M890 300 V392 H1047" />
+    <!-- W -->
+    <path id="w_mwres" class="w" d="M1063 290 H1100" />
+    <path id="w_mwalu" class="w" d="M1063 392 H1085 V325 H1100" />
+    <path id="w_resout" class="w" d="M1116 300 H1150" />
+    <path id="w_wb" class="w" d="M1150 300 V512 H326 V350 H340" />
+    <!-- forwarding paths -->
+    <path id="f_MEA" class="w f" d="M893 392 V468 H628 V262 H640" />
+    <path id="f_MEB" class="w f" d="M893 392 V468 H632 V332 H640" />
+    <path id="f_WEA" class="w f" d="M1150 484 H620 V250 H640" />
+    <path id="f_WEB" class="w f" d="M1150 484 H624 V318 H640" />
+    <path id="f_WDA" class="w f" d="M1150 498 H505 V262 H520" />
+    <path id="f_WDB" class="w f" d="M1150 498 H509 V332 H520" />
+    <!-- hazard unit control lines -->
+    <path id="c_stallF" class="w c" d="M112 545 V305" />
+    <path id="c_stallD" class="w c" d="M300 545 V522" />
+    <path id="c_flushD" class="w c" d="M310 545 V522" />
+    <path id="c_fwdD" class="w c" d="M528 545 V350" />
+    <path id="c_flushE" class="w c" d="M605 545 V522" />
+    <path id="c_fwdE" class="w c" d="M648 545 V350" />
+    <path id="c_misp" class="w c" d="M780 125 V545" />
+  </g>
+
+  <!-- pipeline registers -->
+  <g class="bars">
+    <rect id="bFD" class="bar" x="297" y="55" width="16" height="467" rx="3"/>
+    <rect id="bDE" class="bar" x="597" y="55" width="16" height="467" rx="3"/>
+    <rect id="bEM" class="bar" x="867" y="55" width="16" height="467" rx="3"/>
+    <rect id="bMW" class="bar" x="1047" y="55" width="16" height="467" rx="3"/>
+    <text x="305" y="49" class="bl">F/D</text><text x="605" y="49" class="bl">D/E</text>
+    <text x="875" y="49" class="bl">E/M</text><text x="1055" y="49" class="bl">M/W</text>
+    <text id="tFD" class="bv" transform="translate(309 290) rotate(-90)"></text><text id="tDE" class="bv" transform="translate(609 290) rotate(-90)"></text>
+  </g>
+
+  <!-- blocks -->
+  <g class="blocks">
+    <polygon id="k_pcmux" class="blk" points="25,225 45,240 45,310 25,325"/>
+    <text x="35" y="218" class="sl" text-anchor="middle">PC mux</text>
+    <rect id="k_pc" class="blk" x="70" y="245" width="50" height="60" rx="4"/><text x="95" y="280" class="bn" text-anchor="middle">PC</text>
+    <text id="tPC" x="95" y="240" class="bt" text-anchor="middle"></text>
+    <rect id="k_add" class="blk" x="150" y="120" width="60" height="40" rx="4"/><text x="180" y="145" class="bn" text-anchor="middle">+4</text>
+    <rect id="k_im" class="blk" x="150" y="215" width="120" height="120" rx="4"/><text x="210" y="270" class="bn" text-anchor="middle">Instr</text><text x="210" y="288" class="bn" text-anchor="middle">Memory</text>
+    <rect id="k_bp" class="blk" x="40" y="390" width="230" height="85" rx="6"/><text x="155" y="425" class="bn" text-anchor="middle">Branch predictor</text><text x="155" y="445" class="sl" text-anchor="middle">BTB · 16 entries · 2-bit counters</text>
+    <text id="tBP" x="155" y="464" class="bt" text-anchor="middle" style="fill:var(--good)"></text>
+
+    <rect id="k_dec" class="blk" x="340" y="70" width="130" height="100" rx="6"/><text x="405" y="125" class="bn" text-anchor="middle">Decoder</text>
+    <rect id="k_rf" class="blk" x="340" y="220" width="140" height="150" rx="4"/><text x="410" y="290" class="bn" text-anchor="middle">Register</text><text x="410" y="308" class="bn" text-anchor="middle">file</text>
+    <text x="474" y="252" class="sl" text-anchor="end">RD1</text><text x="474" y="322" class="sl" text-anchor="end">RD2</text><text x="346" y="355" class="sl">WD</text><text x="346" y="257" class="sl">rs1,rs2</text>
+    <rect id="k_ext" class="blk" x="350" y="410" width="120" height="50" rx="4"/><text x="410" y="440" class="bn" text-anchor="middle">Extend</text>
+    <polygon id="k_m1d" class="blk" points="520,235 536,245 536,270 520,280"/><polygon id="k_m2d" class="blk" points="520,305 536,315 536,340 520,350"/>
+    <text x="528" y="228" class="sl" text-anchor="middle">W→D</text>
+
+    <polygon id="k_mae" class="blk" points="640,235 656,245 656,270 640,280"/><polygon id="k_mbe" class="blk" points="640,305 656,315 656,340 640,350"/>
+    <text x="648" y="228" class="sl" text-anchor="middle">Fwd</text>
+    <polygon id="k_alu" class="blk" points="700,220 760,250 760,350 700,380 700,315 714,300 700,285"/><text x="738" y="305" class="bn" text-anchor="middle">ALU</text>
+    <rect id="k_pcl" class="blk" x="690" y="75" width="110" height="50" rx="4"/><text x="745" y="105" class="bn" text-anchor="middle">PC Logic</text>
+    <rect id="k_mc" class="blk" x="776" y="398" width="82" height="44" rx="4"/><text x="817" y="425" class="bn" text-anchor="middle">MCycle</text>
+
+    <rect id="k_dm" class="blk" x="905" y="230" width="115" height="120" rx="4"/><text x="962" y="285" class="bn" text-anchor="middle">Data</text><text x="962" y="303" class="bn" text-anchor="middle">Memory</text>
+    <polygon id="k_res" class="blk" points="1100,260 1116,270 1116,330 1100,340"/>
+    <text x="1108" y="252" class="sl" text-anchor="middle">Result</text>
+  </g>
+
+  <!-- signal labels -->
+  <g class="sigs">
+    <text x="16" y="74" class="sl" id="l_redirect">PCNext_E (branch decided in E)</text>
+    <text x="40" y="99" class="sl" id="l_plus4">PC+4</text>
+    <text x="122" y="372" class="sl" id="l_bppred">PrBTA_F</text>
+    <text x="300" y="191" class="sl" id="l_bpupd">update BTB (Taken_E, target)</text>
+    <text x="900" y="386" class="sl">ALUResult_M</text>
+    <text x="1122" y="294" class="sl">Result_W</text>
+    <text x="700" y="464" class="sl" id="l_fME">ALUResult_M → E</text>
+    <text x="700" y="480" class="sl" id="l_fWE">Result_W → E</text>
+    <text x="370" y="494" class="sl" id="l_fWD">Result_W → D</text>
+    <text x="340" y="508" class="sl">write back (rd_W)</text>
+  </g>
+
+  <!-- hazard unit -->
+  <rect id="k_hz" class="blk hz" x="10" y="545" width="1180" height="38" rx="6"/>
+  <text x="600" y="569" class="bn" text-anchor="middle">Hazard unit</text>
+  <g class="csl">
+    <text id="l_stallF" x="117" y="540" class="sl">StallF</text>
+    <text id="l_stallD" x="295" y="540" class="sl" text-anchor="end">StallD</text>
+    <text id="l_flushD" x="315" y="540" class="sl">FlushD</text>
+    <text id="l_fwdD" x="523" y="540" class="sl" text-anchor="end">Forward1D/2D</text>
+    <text id="l_flushE" x="600" y="540" class="sl" text-anchor="end">FlushE</text>
+    <text id="l_fwdE" x="653" y="540" class="sl">ForwardAE/BE</text>
+    <text id="l_misp" x="785" y="540" class="sl">Mispredict_E</text>
+  </g>
+</svg>
+</div>
+    <p class="quiet dpcap" id="dpCap"></p>
+    <p class="quiet dpsrc">Simplified from the pipelined datapath with hazard unit and branch predictor in the CG3207 lecture notes (Ch. 6, “Dynamic Branch Prediction”). Block and signal names follow our RV.v and Hazard.v. Coloured wires carry the instruction in that stage.</p>
+  </section>
+
+  <div class="bench">
+    <div class="rail">
+      <section class="panel">
+        <div class="label">Program</div>
+        <div class="prog" id="prog"></div>
+        <p class="quiet" id="progNote"></p>
+      </section>
+      <section class="panel">
+        <div class="label">Run it on</div>
+        <div class="modes" id="modes"></div>
+      </section>
+      <section class="panel">
+        <div class="label">So far</div>
+        <div class="stats" id="stats"></div>
+      </section>
+      <section class="panel btb" id="btbPanel" hidden>
+        <div class="label">BTB entry for the <span class="mono">bne</span></div>
+        <dl class="row" id="btbRows"></dl>
+        <div class="ctrs" id="ctrs" style="--k: var(--good)"></div>
+        <p class="quiet" id="btbNote"></p>
+      </section>
+    </div>
+
+    <div class="main">
+
+      <section class="panel">
+        <div class="label">What the hardware does this cycle</div>
+        <div class="events" id="events"></div>
+      </section>
+    </div>
+  </div>
+
+  <section class="panel">
+    <div class="label">Timing grid · click a cycle number to jump to it</div>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--sF)"></i>F fetch</span>
+      <span><i class="sw" style="background:var(--sD)"></i>D decode</span>
+      <span><i class="sw" style="background:var(--sE)"></i>E execute</span>
+      <span><i class="sw" style="background:var(--sM)"></i>M memory</span>
+      <span><i class="sw" style="background:var(--sW)"></i>W writeback</span>
+      <span>striped = held (stall)</span>
+      <span style="color:var(--flush)">✕ = flushed (wrong path)</span>
+    </div>
+    <div class="gridwrap"><table class="tg" id="grid"></table></div>
+  </section>
+</div>
+<script>
+// ---- pipeline model of the Group 19 CPU (5 stages, branches resolve in E) ----
+const BASE = 0x00400000;
+const READS = { lw:['rs1'], sw:['rs1','rs2'], add:['rs1','rs2'], sub:['rs1','rs2'], xor:['rs1','rs2'], or:['rs1','rs2'], addi:['rs1'], bne:['rs1','rs2'], nop:[] };
+function srcs(ins){ return READS[ins.op].map(f => ({ reg: ins[f], port: f === 'rs1' ? 'A' : 'B' })).filter(s => s.reg && s.reg !== 'zero'); }
+function writes(ins){ return (ins.rd && ins.rd !== 'zero') ? ins.rd : null; }
+
+// classic build: 3 nops so a consumer is >= 4 instructions after its producer, 2 nops after a branch
+function padProgram(prog){
+  const out = []; const map = {};
+  prog.forEach((ins, i) => {
+    let need = 0;
+    for (const s of srcs(ins)) {
+      for (let k = out.length - 1; k >= 0; k--) {
+        if (writes(out[k]) === s.reg) { need = Math.max(need, 4 - (out.length - k)); break; }
+      }
+    }
+    for (let n = 0; n < need; n++) out.push({ op:'nop', text:'nop', pad:true });
+    map[i] = out.length;
+    out.push(Object.assign({}, ins, need > 0 ? { waited: need } : {}));
+    if (ins.op === 'bne') { out.push({ op:'nop', text:'nop', pad:true }); out.push({ op:'nop', text:'nop', pad:true }); }
+  });
+  out.forEach(ins => { if (ins.target !== undefined) ins.target = map[ins.target]; });
+  return out;
+}
+
+function simulate(prog, opts, initRegs){
+  const regs = Object.assign({}, initRegs); const mem = {};
+  const rv = n => n === 'zero' ? 0 : (regs[n] | 0);
+  const btb = {};
+  const dyn = []; let nextId = 0;
+  const last = prog.length - 1;
+  function fetch(si){
+    if (si < 0 || si > last) return null;
+    const ins = prog[si];
+    const d = { id: nextId++, si, ins, pc: BASE + 4 * si, cells: {}, flushed: false, flushCycle: null, pred: { taken:false } };
+    if (opts.predictor && ins.op === 'bne' && btb[si] && btb[si].ctr >= 2) d.pred = { taken:true, target: btb[si].target };
+    dyn.push(d); return d;
+  }
+  let st = { F: fetch(0), D: null, E: null, M: null, W: null };
+  const snaps = []; let cycle = 0; let total = 0;
+  let stallCount = 0, flushCount = 0, mispredicts = 0, nops = 0;
+  while (cycle < 400) {
+    cycle++;
+    const ev = []; const btbBefore = JSON.parse(JSON.stringify(btb)); let btbChange = null;
+    for (const s of ['F','D','E','M','W']) {
+      const d = st[s]; if (!d) continue;
+      const prev = d.cells[cycle - 1];
+      d.cells[cycle] = { stage: s, held: prev && prev.stage === s };
+    }
+    // F: prediction made when fetched
+    if (st.F && opts.predictor && st.F.ins.op === 'bne' && !st.F.cells[cycle].held) {
+      const e = btb[st.F.si];
+      if (st.F.pred.taken) ev.push({ type:'predict', at:'F', d: st.F, target: st.F.pred.target, ctr: e.ctr });
+      else if (e) ev.push({ type:'lookupNT', at:'F', d: st.F, ctr: e.ctr });
+      else ev.push({ type:'miss', at:'F', d: st.F });
+    }
+    // forwarding (hazard unit only)
+    if (opts.hazard && st.E) {
+      for (const s of srcs(st.E.ins)) {
+        if (st.M && writes(st.M.ins) === s.reg) ev.push({ type:'fwdME', at:'E', d: st.E, reg: s.reg, port: s.port, from: st.M });
+        else if (st.W && writes(st.W.ins) === s.reg) ev.push({ type:'fwdWE', at:'E', d: st.E, reg: s.reg, port: s.port, from: st.W });
+      }
+    }
+    if (opts.hazard && st.D) {
+      for (const s of srcs(st.D.ins)) if (st.W && writes(st.W.ins) === s.reg) ev.push({ type:'fwdWD', at:'D', d: st.D, reg: s.reg, from: st.W });
+    }
+    if (!opts.hazard && st.D && st.D.ins.waited && !st.D.cells[cycle].held) {
+      ev.push({ type:'nopwait', at:'D', d: st.D, n: st.D.ins.waited });
+    }
+    // E: execute (program order, so the values are architecturally right)
+    let mis = false, correctSi = null;
+    if (st.E) {
+      const d = st.E, ins = d.ins;
+      if (ins.op === 'nop') nops++;
+      const a = rv(ins.rs1), b = rv(ins.rs2);
+      if (ins.op === 'add') regs[ins.rd] = (a + b) | 0;
+      if (ins.op === 'sub') regs[ins.rd] = (a - b) | 0;
+      if (ins.op === 'xor') regs[ins.rd] = a ^ b;
+      if (ins.op === 'or')  regs[ins.rd] = a | b;
+      if (ins.op === 'addi') regs[ins.rd] = (a + ins.imm) | 0;
+      if (ins.op === 'lw')  regs[ins.rd] = mem[a + ins.imm] ?? 42;
+      if (ins.op === 'sw')  mem[a + ins.imm] = b;
+      if (ins.op === 'bne') {
+        const taken = a !== b;
+        if (opts.flush) {
+          mis = d.pred.taken ? (!taken || d.pred.target !== ins.target) : taken;
+          correctSi = taken ? ins.target : d.si + 1;
+          ev.push({ type: mis ? 'mispredict' : 'correct', at:'E', d, taken, predTaken: d.pred.taken });
+        } else {
+          correctSi = taken ? ins.target : d.si + 1;
+          mis = taken; // old CPU: redirect, the 2 nops behind it are harmless
+          ev.push({ type: 'branchOld', at:'E', d, taken });
+        }
+        // BTB trains in E (also while the predictor is off)
+        const e = btb[d.si];
+        if (e) { const old = e.ctr; e.ctr = taken ? Math.min(3, e.ctr + 1) : Math.max(0, e.ctr - 1); if (taken) e.target = ins.target; btbChange = { si: d.si, from: old, to: e.ctr, alloc:false }; }
+        else if (taken) { btb[d.si] = { ctr: 2, target: ins.target }; btbChange = { si: d.si, from: null, to: 2, alloc:true }; }
+      }
+    }
+    const lwStall = opts.hazard && st.E && st.D && st.E.ins.op === 'lw' && srcs(st.D.ins).some(s => s.reg === writes(st.E.ins));
+    if (lwStall) { ev.push({ type:'lwstall', at:'D', d: st.D, load: st.E }); stallCount++; }
+    const doFlush = mis && opts.flush;
+    if (doFlush) { mispredicts++; for (const s of ['F','D']) if (st[s]) { st[s].flushed = true; st[s].flushCycle = cycle; flushCount++; } }
+    snaps.push({ cycle, st: Object.assign({}, st), ev, btbBefore, btb: JSON.parse(JSON.stringify(btb)), btbChange, lwStall, flush: doFlush,
+                 stats: { stallCount, flushCount, mispredicts, nops } });
+    if (st.W && st.W.si === last && !st.W.flushed) { total = cycle; break; }
+    // advance
+    const nxt = { W: st.M, M: st.E, E: null, D: null, F: null };
+    if (doFlush) { nxt.F = fetch(correctSi); }
+    else if (mis && !opts.flush) { nxt.E = st.D; nxt.D = st.F; nxt.F = fetch(correctSi); }
+    else if (lwStall) { nxt.D = st.D; nxt.F = st.F; }
+    else {
+      nxt.E = st.D; nxt.D = st.F;
+      const f = st.F; const nsi = f ? (f.pred.taken ? f.pred.target : f.si + 1) : null;
+      nxt.F = nsi === null ? null : fetch(nsi);
+    }
+    st = nxt;
+  }
+  return { dyn, snaps, total, prog, regs };
+}
+
+
+// ---- scenarios ----
+const P_HZ = [
+  { op:'lw',  rd:'t0', rs1:'s1', imm:0, text:'lw   t0, 0(s1)' },
+  { op:'add', rd:'t1', rs1:'t0', rs2:'t2', text:'add  t1, t0, t2' },
+  { op:'sub', rd:'t3', rs1:'t1', rs2:'t4', text:'sub  t3, t1, t4' },
+  { op:'xor', rd:'t5', rs1:'t3', rs2:'t1', text:'xor  t5, t3, t1' },
+  { op:'sw',  rs1:'s1', rs2:'t5', imm:4, text:'sw   t5, 4(s1)' },
+  { op:'or',  rd:'a0', rs1:'t3', rs2:'zero', text:'or   a0, t3, zero' },
+];
+const P_BP = [
+  { op:'addi', rd:'t0', rs1:'zero', imm:5, text:'addi t0, zero, 5' },
+  { op:'add',  rd:'s1', rs1:'s1', rs2:'t0', text:'add  s1, s1, t0', label:'loop' },
+  { op:'addi', rd:'t0', rs1:'t0', imm:-1, text:'addi t0, t0, -1' },
+  { op:'bne',  rs1:'t0', rs2:'zero', target:1, text:'bne  t0, zero, loop' },
+  { op:'sw',   rs1:'s0', rs2:'s1', imm:0x80, text:'sw   s1, 0x80(s0)' },
+];
+const INIT_HZ = { s1: 0x10010000, t2: 3, t4: 1 };
+const INIT_BP = { s0: 0xFFFF0000 | 0, s1: 0 };
+
+const SCEN = {
+  hz: {
+    note: 'Every instruction needs the result of the one just before it, and the first is a load. A worst case for a pipeline.',
+    modes: [
+      { key:'classic', name:'Classic pipeline (nops)', desc:'Person 1’s pipeline: no hazard unit, so the program needs 3 nops between dependent instructions.', prog: padProgram(P_HZ), opts:{ hazard:false, flush:false, predictor:false } },
+      { key:'hazard', name:'+ Hazard unit', desc:'Same program with no nops. Forwarding and a load-use stall keep it correct.', prog: P_HZ, opts:{ hazard:true, flush:true, predictor:false } },
+    ], init: INIT_HZ, start: 1,
+  },
+  bp: {
+    note: 'A loop that runs 5 times and adds 5+4+3+2+1 = 15 into s1, then writes it to the 7-segment display. The bne is taken 4 times, then falls through.',
+    modes: [
+      { key:'classic', name:'Classic pipeline (nops)', desc:'No hazard unit: 3 nops between dependent instructions and 2 after the branch.', prog: padProgram(P_BP), opts:{ hazard:false, flush:false, predictor:false } },
+      { key:'off', name:'+ Hazard unit, predictor off', desc:'DIP[15] down. Every taken branch is found in E, so 2 wrong-path instructions get flushed.', prog: P_BP, opts:{ hazard:true, flush:true, predictor:false } },
+      { key:'on', name:'+ Branch predictor', desc:'DIP[15] up. After the first trip round the loop the BTB predicts the bne, so it costs nothing.', prog: P_BP, opts:{ hazard:true, flush:true, predictor:true } },
+    ], init: INIT_BP, start: 2,
+  },
+};
+for (const k in SCEN) { const s = SCEN[k]; s.runs = s.modes.map(m => simulate(m.prog, m.opts, s.init)); }
+
+// ---- Verilog snippets (from the team's files) ----
+const portName = p => p === 'A' ? { rs:'rs1E', f:'ForwardAE', rd:'RD1_Fwd_E', raw:'RD1_E' } : { rs:'rs2E', f:'ForwardBE', rd:'RD2_Fwd_E', raw:'RD2_E' };
+function fwdCode(port, from){
+  const n = portName(port);
+  return { file:'Hazard.v + RV.v', lines: [
+    `// Hazard.v`,
+    `if ((${n.rs} == rdM) & RegWriteM & (rdM != 5'd0))`,
+    `    ${n.f} = 2'b10;   // take it from M`,
+    `else if ((${n.rs} == rdW) & RegWriteW & (rdW != 5'd0))`,
+    `    ${n.f} = 2'b01;   // take it from W`,
+    `else ${n.f} = 2'b00;  // register file value`,
+    `// RV.v: the mux in front of the ALU`,
+    `case (${n.f})`,
+    `    2'b10:   ${n.rd} = ExecResult_M;`,
+    `    2'b01:   ${n.rd} = Result_W;`,
+    `    default: ${n.rd} = ${n.raw};`,
+  ], hl: from === 'M' ? [1,2,8] : [3,4,9] };
+}
+const CODE = {
+  fwdWD: { file:'Hazard.v + RV.v', lines: [
+    `// Hazard.v`,
+    `assign Forward1D = (rs1D == rdW) & RegWriteW & (rdW != 5'd0);`,
+    `assign Forward2D = (rs2D == rdW) & RegWriteW & (rdW != 5'd0);`,
+    `// RV.v: use W's result instead of the register file's old value`,
+    `assign RD1_D = Forward1D ? Result_W : RD1_RF_D;`,
+    `assign RD2_D = Forward2D ? Result_W : RD2_RF_D;`,
+  ], hl:[1,2,4,5] },
+  lwstall: { file:'Hazard.v', lines: [
+    `assign lwStall = ((rs1D == rdE) | (rs2D == rdE)) & MemtoRegE & (rdE != 5'd0);`,
+    `assign StallF = lwStall | BusyE;   // PC holds`,
+    `assign StallD = lwStall | BusyE;   // F/D holds`,
+    `assign FlushE = lwStall | RedirectE; // bubble into E`,
+  ], hl:[0,1,2,3] },
+  predict: { file:'BranchPredictor.v + RV.v', lines: [
+    `wire [IDX_BITS-1:0] idx_F = PC_F[IDX_BITS+1:2];`,
+    `wire hit_F = valid[idx_F] && (tag[idx_F] == PC_F[31:IDX_BITS+2]);`,
+    `assign PrTaken_F = Enable && hit_F && ctr[idx_F][1];`,
+    `assign PrBTA_F   = {target[idx_F], 2'b00};`,
+    `// RV.v: next PC`,
+    `assign PC_IN = Mispredict_E ? PCNext_E : (PrTaken_F ? PrBTA_F : PC_Plus4_F);`,
+  ], hl:[1,2,3,5] },
+  notTaken: { file:'BranchPredictor.v + RV.v', lines: [
+    `wire hit_F = valid[idx_F] && (tag[idx_F] == PC_F[31:IDX_BITS+2]);`,
+    `assign PrTaken_F = Enable && hit_F && ctr[idx_F][1];   // = 0 here`,
+    `// RV.v: next PC`,
+    `assign PC_IN = Mispredict_E ? PCNext_E : (PrTaken_F ? PrBTA_F : PC_Plus4_F);`,
+  ], hl:[0,1,3] },
+  mispredict: { file:'BranchPredictor.v + Hazard.v + RV.v', lines: [
+    `assign Mispredict_E = PrTaken_E ? (~Taken_E | (PrBTA_E != Target_E)) : Taken_E;`,
+    `// Hazard.v (RedirectE = Mispredict_E)`,
+    `assign FlushD = RedirectE;            // clear F/D`,
+    `assign FlushE = lwStall | RedirectE;  // clear D/E`,
+    `// RV.v: fetch from the right address next`,
+    `assign PC_IN = Mispredict_E ? PCNext_E : ...;`,
+  ], hl:[0,2,3,5] },
+  correct: { file:'BranchPredictor.v', lines: [
+    `assign Mispredict_E = PrTaken_E ? (~Taken_E | (PrBTA_E != Target_E)) : Taken_E;  // = 0`,
+  ], hl:[0] },
+  update: { file:'BranchPredictor.v', lines: [
+    `if (hit_E) begin`,
+    `    if (Taken_E && ctr[idx_E] != 2'b11)       ctr[idx_E] <= ctr[idx_E] + 2'b01;`,
+    `    else if (~Taken_E && ctr[idx_E] != 2'b00) ctr[idx_E] <= ctr[idx_E] - 2'b01;`,
+    `    if (Taken_E) target[idx_E] <= Target_E[31:2];`,
+    `end`,
+    `else if (Taken_E) begin   // first time taken: allocate`,
+    `    valid[idx_E] <= 1'b1;   tag[idx_E] <= PC_E[31:IDX_BITS+2];`,
+    `    target[idx_E] <= Target_E[31:2];   ctr[idx_E] <= 2'b10;`,
+    `end`,
+  ], hl:[] },
+  nopwait: { file:'RegFile.v', lines: [
+    `always@(posedge CLK)          // written at the END of the W cycle`,
+    `    if((rd != 5'b00000) & (WE))`,
+    `        RegBank[rd] <= WD ;`,
+  ], hl:[0,2] },
+  branchOld: { file:'RV.v (Person 1 pipeline)', lines: [
+    `case (PCSrc_E)`,
+    `    2'b01:   PC_Base = PC_E ;    // branch taken: PC_E + imm`,
+    `    2'b10:   PC_Base = RD1_E ;   // jalr`,
+    `    default: PC_Base = PC_F ;    // PC_F + 4`,
+    `endcase`,
+  ], hl:[1] },
+};
+
+// ---- state ----
+let tab = 'hz'; const modeIdx = { hz: 1, bp: 2 }; let cyc = 1; let timer = null;
+const $ = id => document.getElementById(id);
+const hex = n => '0x' + (n >>> 0).toString(16).toUpperCase().padStart(8, '0');
+const bin2 = c => c === null || c === undefined ? '--' : c.toString(2).padStart(2, '0');
+const STAGES = [['F','Fetch','--sF'],['D','Decode','--sD'],['E','Execute','--sE'],['M','Memory','--sM'],['W','Writeback','--sW']];
+const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+const run = () => SCEN[tab].runs[modeIdx[tab]];
+const mode = () => SCEN[tab].modes[modeIdx[tab]];
+
+function codeBlock(c){
+  return `<div class="file">${esc(c.file)}</div><pre class="code">${c.lines.map((l,i)=>`<span${c.hl.includes(i)?' class="hl"':''}>${esc(l)}</span>`).join('')}</pre>`;
+}
+function evCard(kind, color, text, code){
+  return `<div class="ev" style="--k:var(${color})"><div class="eh"><span class="kind">${kind}</span></div><p>${text}</p>${code ? codeBlock(code) : ''}</div>`;
+}
+const iname = d => `<span class="mono">${esc(d.ins.text.replace(/\s+/g,' '))}</span>`;
+
+function renderEvents(s){
+  const out = [];
+  for (const e of s.ev) {
+    if (e.type === 'fwdME' || e.type === 'fwdWE') {
+      const from = e.type === 'fwdME' ? 'M' : 'W';
+      out.push(evCard(`Forward ${from} → E`, '--fwd',
+        `${iname(e.d)} is in E and needs <b class="mono">${e.reg}</b>. ${iname(e.from)} is in ${from} and has just produced it, so the hazard unit sets <span class="mono">${portName(e.port).f} = ${from === 'M' ? "2'b10" : "2'b01"}</span> and the value goes straight into the ALU. No waiting.`,
+        fwdCode(e.port, from)));
+    } else if (e.type === 'fwdWD') {
+      out.push(evCard('Forward W → D', '--fwd',
+        `${iname(e.d)} reads <b class="mono">${e.reg}</b> in D while ${iname(e.from)} writes it in W. The register file only updates at the end of the cycle, so it would hand back the old value. <span class="mono">Forward1D/Forward2D</span> pass <span class="mono">Result_W</span> in directly.`, CODE.fwdWD));
+    } else if (e.type === 'lwstall') {
+      out.push(evCard('Load-use stall', '--stall',
+        `${iname(e.d)} needs <b class="mono">${e.load.ins.rd}</b>, but ${iname(e.load)} is a load in E and its data only arrives at the end of M. Forwarding can’t help in time, so the PC and F/D hold for one cycle and a bubble goes into E. Next cycle the value is forwarded from W.`, CODE.lwstall));
+    } else if (e.type === 'predict') {
+      out.push(evCard('Predict taken (F)', '--good',
+        `Fetching ${iname(e.d)} at <span class="mono">${hex(e.d.pc)}</span>. The BTB has it with counter <b class="mono">${bin2(e.ctr)}</b>, which means taken, so the next fetch is the loop target <span class="mono">${hex(0x00400000 + 4 * e.target)}</span>, not PC+4. If the guess is right, the branch costs 0 cycles.`, CODE.predict));
+    } else if (e.type === 'lookupNT') {
+      out.push(evCard('Predict not taken (F)', '--muted',
+        `${iname(e.d)} is in the BTB but its counter <b class="mono">${bin2(e.ctr)}</b> says not taken, so fetch continues at PC+4.`, CODE.notTaken));
+    } else if (e.type === 'miss') {
+      out.push(evCard('BTB miss (F)', '--muted',
+        `${iname(e.d)} has never been taken yet, so it isn’t in the BTB. The predictor can’t help: fetch continues at PC+4, the same as having no predictor.`, CODE.notTaken));
+    } else if (e.type === 'mispredict') {
+      out.push(evCard('Mispredict: flush', '--flush',
+        `${iname(e.d)} is decided in E: actually <b>${e.taken ? 'taken' : 'not taken'}</b>, but F guessed <b>${e.predTaken ? 'taken' : 'not taken'}</b>. The two instructions fetched behind it (now in F and D) are on the wrong path, so F/D and D/E are cleared and the PC jumps to the right address. Cost: 2 cycles.`, CODE.mispredict));
+    } else if (e.type === 'correct') {
+      out.push(evCard('Prediction correct', '--good',
+        `${iname(e.d)} is decided in E: <b>${e.taken ? 'taken' : 'not taken'}</b>, exactly as F guessed. Nothing to flush, 0 cycles lost.`, CODE.correct));
+    } else if (e.type === 'branchOld') {
+      out.push(evCard('Branch decided (old CPU)', '--muted',
+        `${iname(e.d)} is decided in E: <b>${e.taken ? 'taken' : 'not taken'}</b>. There is no hazard unit, so nothing is flushed. The 2 nops placed after every branch are what sit in F and D, and running them does no harm.`, CODE.branchOld));
+    } else if (e.type === 'nopwait') {
+      out.push(evCard('Waiting with nops', '--stall',
+        `${iname(e.d)} reads its registers now. Without a hazard unit, the ${e.n} nop${e.n > 1 ? 's' : ''} in front of it are the only reason the value is ready: they keep it back until the producer has written the register file.`, CODE.nopwait));
+    }
+  }
+  if (s.btbChange && mode().opts.flush) {
+    const c = s.btbChange; const br = s.ev.find(e => e.type === 'mispredict' || e.type === 'correct');
+    const taken = br ? br.taken : true;
+    const code = Object.assign({}, CODE.update, { hl: c.alloc ? [5,6,7] : (taken ? [0,1,3] : [0,2]) });
+    out.push(evCard('BTB update (E)', '--good', c.alloc
+      ? `First time this branch is taken, so it gets a BTB entry: target = the loop, counter = <b class="mono">10</b> (weakly taken).`
+      : `The branch was <b>${taken ? 'taken' : 'not taken'}</b>, so its counter goes <b class="mono">${bin2(c.from)} → ${bin2(c.to)}</b>${c.from === c.to ? ' (already at the top: it saturates)' : ''}.${mode().opts.predictor ? '' : ' The predictor is off, but the table still learns.'}`, code));
+  }
+  if (!out.length) out.push(`<p class="quiet">Nothing special: every instruction just moves one stage forward.</p>`);
+  $('events').innerHTML = out.join('');
+}
+
+function renderStrip(s){
+  const srcStage = new Set(); const tags = { F:[], D:[], E:[], M:[], W:[] };
+  for (const e of s.ev) {
+    if (e.type === 'fwdME') { srcStage.add('M'); tags.E.push(['fwd', `${e.reg} ← M`]); }
+    if (e.type === 'fwdWE') { srcStage.add('W'); tags.E.push(['fwd', `${e.reg} ← W`]); }
+    if (e.type === 'fwdWD') { srcStage.add('W'); tags.D.push(['fwd', `${e.reg} ← W`]); }
+    if (e.type === 'lwstall') { tags.D.push(['stall', 'stall: hold']); tags.F.push(['stall', 'hold']); }
+    if (e.type === 'predict') tags.F.push(['good', 'predict taken']);
+    if (e.type === 'mispredict') { tags.E.push(['flush', 'mispredict']); }
+    if (e.type === 'correct') tags.E.push(['good', 'guess right']);
+  }
+  if (s.flush) { tags.F.push(['flush', 'flushed']); tags.D.push(['flush', 'flushed']); }
+  $('strip').innerHTML = STAGES.map(([k, name, col]) => {
+    const d = s.st[k];
+    const cls = ['stage']; if (!d) cls.push('bubble'); if (srcStage.has(k)) cls.push('src');
+    const txt = d ? `<div class="ins">${esc(d.ins.text.replace(/\s+/g,' '))}</div>` : `<div class="ins empty">${s.cycle > 'FDEMW'.indexOf(k) ? 'bubble' : 'empty'}</div>`;
+    if (d && d.cells[s.cycle] && d.cells[s.cycle].held && !tags[k].length) tags[k].push(['stall', 'held']);
+    return `<div class="${cls.join(' ')}" style="--c:var(${col})"><div class="sh"><span class="sl">${k}</span><span class="sn">${name}</span></div>${txt}${tags[k].map(([c,t])=>`<span class="tag ${c}">${esc(t)}</span>`).join('')}</div>`;
+  }).join('');
+}
+
+function renderProg(s){
+  const r = run(); const where = {};
+  for (const [k] of STAGES) { const d = s.st[k]; if (d && !(s.flush && (k === 'F' || k === 'D'))) (where[d.si] = where[d.si] || []).push(k); }
+  $('prog').innerHTML = r.prog.map((ins, i) => {
+    const pc = 0x00400000 + 4 * i; const live = where[i];
+    return `<div class="pl${ins.op === 'nop' ? ' nop' : ''}${live ? ' live' : ''}"><span class="pc">${hex(pc).slice(4)}</span><span class="txt">${ins.label ? `<span class="lbl">${ins.label}:</span> ` : ''}${esc(ins.text)}</span><span class="chips">${(live||[]).map(k=>`<span class="chip" style="background:var(--s${k})">${k}</span>`).join('')}</span></div>`;
+  }).join('');
+}
+
+function renderStats(s){
+  const r = run(); const st = s.stats; const done = s.cycle === r.total;
+  const items = [[`${s.cycle}${done ? '' : ' …'}`, `cycles (finishes at ${r.total})`]];
+  if (mode().opts.hazard) items.push([st.stallCount, 'load-use stall cycles']);
+  else items.push([st.nops, 'nops executed']);
+  if (mode().opts.flush) items.push([st.flushCount, 'instructions flushed']);
+  if (tab === 'bp' && mode().opts.flush) items.push([st.mispredicts, 'mispredictions']);
+  if (tab === 'bp') items.push([s.cycle === r.total ? '15' : '—', '7-seg result (s1)']);
+  $('stats').innerHTML = items.map(([b, t]) => `<div class="stat"><b>${b}</b><span>${t}</span></div>`).join('');
+}
+
+function renderBTB(s){
+  const p = $('btbPanel'); if (tab !== 'bp') { p.hidden = true; return; }
+  p.hidden = false; const r = run(); const si = r.prog.findIndex(i => i.op === 'bne'); const pc = 0x00400000 + 4 * si;
+  const e = s.btb[si]; const used = mode().opts.predictor; const trains = mode().opts.flush;
+  $('btbRows').innerHTML = `<dt>PC</dt><dd>${hex(pc)}</dd><dt>row</dt><dd>PC[5:2] = ${(pc >> 2) & 15}</dd><dt>tag</dt><dd>PC[31:6] = 0x${(pc >>> 6).toString(16).toUpperCase()}</dd><dt>valid</dt><dd>${e && trains ? '1' : '0'}</dd><dt>target</dt><dd>${e && trains ? hex(0x00400000 + 4 * e.target) + ' (loop)' : '—'}</dd>`;
+  const names = ['strongly not taken','weakly not taken','weakly taken','strongly taken'];
+  const cur = e && trains ? e.ctr : null;
+  $('ctrs').innerHTML = [0,1,2,3].map(c => `<div class="ctr${cur === c ? ' on' : ''}"><b>${bin2(c)}</b>${names[c]}</div>`).join('');
+  $('btbNote').textContent = !trains ? 'The classic pipeline has no predictor.' : used ? 'Counter 10 or 11 means F fetches the stored target straight away.' : 'Predictor off (DIP[15] down): the table still learns in E, but F ignores it and always fetches PC+4.';
+}
+
+function renderGrid(){
+  const r = run(); let h = '<thead><tr><th class="rowh"></th>';
+  for (let c = 1; c <= r.total; c++) h += `<th data-c="${c}" class="${c === cyc ? 'now' : ''}">${c}</th>`;
+  h += '</tr></thead><tbody>';
+  for (const d of r.dyn) {
+    const cls = [d.ins.op === 'nop' ? 'nop' : '', d.flushed ? 'flushed' : ''].join(' ');
+    h += `<tr class="${cls}"><th class="rowh">${esc(d.ins.text.replace(/\s+/g,' '))}</th>`;
+    for (let c = 1; c <= r.total; c++) {
+      const x = d.cells[c];
+      if (x) h += `<td class="s${x.held ? ' held' : ''}${c === cyc ? ' now' : ''}" style="background-color:var(--s${x.stage})">${x.stage}</td>`;
+      else if (d.flushed && c === d.flushCycle + 1) h += `<td class="x${c === cyc ? ' now' : ''}">✕</td>`;
+      else h += `<td class="${c === cyc ? 'now' : ''}"></td>`;
+    }
+    h += '</tr>';
+  }
+  $('grid').innerHTML = h + '</tbody>';
+}
+
+function renderModes(){
+  const sc = SCEN[tab]; const max = Math.max(...sc.runs.map(r => r.total)); const best = Math.min(...sc.runs.map(r => r.total));
+  $('modes').innerHTML = sc.modes.map((m, i) => {
+    const t = sc.runs[i].total; const sp = (sc.runs[0].total / t);
+    return `<button class="mode" data-i="${i}" aria-pressed="${i === modeIdx[tab]}"><span class="mname">${m.name}</span><span class="mcyc">${t} cycles</span><span class="mdesc">${m.desc}${i > 0 ? ` <b>${sp.toFixed(2).replace(/\.?0+$/,'')}× faster</b> than classic.` : ''}</span><span class="bar"><i style="width:${(100 * t / max).toFixed(1)}%"></i></span></button>`;
+  }).join('');
+  $('progNote').textContent = sc.note;
+}
+
+
+// ---------- datapath view ----------
+const DPW = [...document.querySelectorAll('#dp .w, #dp .blk, #dp .sl')];
+const IMM = { lw:1, sw:1, addi:1, bne:1 };
+function lite(id, color){ const el = document.getElementById(id); if (!el) return; el.classList.add('on'); el.style.setProperty('--k', `var(${color})`); }
+function renderDatapath(s){
+  DPW.forEach(el => { el.classList.remove('on'); el.style.removeProperty('--k'); });
+  ['bFD','bDE'].forEach(id => $(id).classList.remove('hold','clr'));
+  ['tFD','tDE','tPC','tBP'].forEach(id => $(id).textContent = '');
+  const cap = [];
+  for (const [k] of STAGES) {
+    const d = s.st[k], rg = $('rg' + k), hd = $('hd' + k);
+    rg.classList.remove('on','nop');
+    if (!d) { hd.textContent = s.cycle > 'FDEMW'.indexOf(k) ? 'bubble' : 'empty'; hd.classList.add('dim'); continue; }
+    hd.textContent = d.ins.text.replace(/\s+/g,' '); hd.classList.toggle('dim', d.ins.op === 'nop');
+    rg.classList.add(d.ins.op === 'nop' ? 'nop' : 'on');
+  }
+  const real = k => s.st[k] && s.st[k].ins.op !== 'nop' ? s.st[k] : null;
+  const has = (d, port) => d && srcs(d.ins).some(x => x.port === port);
+  const ev = t => s.ev.find(e => e.type === t);
+  // F
+  const F = s.st.F;
+  if (F) { lite('w_pcim','--sF'); lite('k_pc','--sF'); lite('k_im','--sF'); lite('w_imfd','--sF'); }
+  if (F && mode().opts.predictor) { lite('w_pcbp','--good'); lite('k_bp','--good'); }
+  const old = ev('branchOld');
+  if (s.flush || (old && old.taken)) {
+    const c = s.flush ? '--flush' : '--sE';
+    lite('w_redirect', c); lite('l_redirect', c); lite('k_pcmux', c); lite('w_muxpc', c);
+    cap.push(s.flush ? 'The branch in E was guessed wrong: Mispredict_E sends the correct PC back to the PC mux and clears F/D and D/E.' : 'The branch in E is taken: PC_Logic sends PC_E + imm back to the PC mux.');
+    if (s.flush) lite('c_misp','--flush'), lite('l_misp','--flush');
+  } else if (ev('predict')) {
+    lite('w_bppred','--good'); lite('l_bppred','--good'); lite('k_pcmux','--good'); lite('w_muxpc','--good');
+    cap.push('The BTB hit with a taken counter, so the PC mux picks the predicted target (PrBTA_F) instead of PC+4.');
+  } else if (s.lwStall) {
+    $('tPC').textContent = 'hold';
+  } else if (F || s.cycle === 1) {
+    lite('w_plus4','--sF'); lite('l_plus4','--sF'); lite('k_add','--sF'); lite('k_pcmux','--sF'); lite('w_muxpc','--sF');
+  }
+  if (F && mode().opts.predictor) {
+    const e = s.ev.find(x => x.at === 'F' && ['predict','lookupNT','miss'].includes(x.type));
+    if (e) $('tBP').textContent = e.type === 'predict' ? 'hit · predict taken' : e.type === 'miss' ? 'miss · PC+4' : 'hit · not taken';
+  }
+  // D
+  const D = real('D');
+  if (D) {
+    lite('w_fddec','--sD'); lite('k_dec','--sD'); lite('w_decde','--sD');
+    if (srcs(D.ins).length) { lite('w_fdrf','--sD'); lite('k_rf','--sD'); }
+    if (has(D,'A')) { lite('w_rfm1','--sD'); lite('w_m1de','--sD'); }
+    if (has(D,'B')) { lite('w_rfm2','--sD'); lite('w_m2de','--sD'); }
+    if (IMM[D.ins.op]) { lite('w_fdext','--sD'); lite('k_ext','--sD'); lite('w_extde','--sD'); }
+  }
+  // E
+  const E = real('E');
+  if (E) {
+    lite('k_alu','--sE');
+    if (has(E,'A')) { lite('w_dema','--sE'); lite('w_maalu','--sE'); }
+    if (has(E,'B') && E.ins.op !== 'sw') { lite('w_demb','--sE'); lite('w_mbalu','--sE'); }
+    if (E.ins.op === 'sw') { lite('w_demb','--sE'); }
+    if (IMM[E.ins.op] && E.ins.op !== 'bne') lite('w_imme','--sE');
+    if (E.ins.op === 'bne') { lite('w_depcl','--sE'); lite('w_alupcl','--sE'); lite('k_pcl','--sE'); }
+    else lite('w_aluem','--sE');
+  }
+  // M
+  const M = real('M');
+  if (M) {
+    if (M.ins.op === 'lw' || M.ins.op === 'sw') { lite('w_emdm','--sM'); lite('k_dm','--sM'); if (M.ins.op === 'lw') lite('w_dmmw','--sM'); }
+    else if (writes(M.ins)) lite('w_bypass','--sM');
+  }
+  // W
+  const W = real('W');
+  if (W && writes(W.ins)) {
+    lite(W.ins.op === 'lw' ? 'w_mwres' : 'w_mwalu','--sW'); lite('k_res','--sW'); lite('w_resout','--sW'); lite('w_wb','--sW'); lite('k_rf','--sW');
+  }
+  // hazard unit
+  for (const e of s.ev) {
+    if (e.type === 'fwdME' || e.type === 'fwdWE') {
+      const f = (e.type === 'fwdME' ? 'f_ME' : 'f_WE') + e.port;
+      lite(f,'--fwd'); lite(e.port === 'A' ? 'k_mae' : 'k_mbe','--fwd'); lite('c_fwdE','--fwd'); lite('l_fwdE','--fwd'); lite('k_hz','--fwd');
+      lite(e.type === 'fwdME' ? 'l_fME' : 'l_fWE','--fwd');
+      cap.push(`Forward ${e.type === 'fwdME' ? 'M' : 'W'} → E: ${e.reg} goes straight into ALU input ${e.port}${e.type === 'fwdME' ? ' (ForwardA/B = 10)' : ' (ForwardA/B = 01)'}.`);
+    }
+    if (e.type === 'fwdWD') {
+      const port = (srcs(e.d.ins).find(x => x.reg === e.reg) || {}).port || 'A';
+      lite('f_WD' + port,'--fwd'); lite(port === 'A' ? 'k_m1d' : 'k_m2d','--fwd'); lite('c_fwdD','--fwd'); lite('l_fwdD','--fwd'); lite('l_fWD','--fwd'); lite('k_hz','--fwd');
+      cap.push(`Forward W → D: ${e.reg} is written and read on the same edge, so Result_W is passed straight to D.`);
+    }
+    if (e.type === 'lwstall') {
+      ['c_stallF','c_stallD','c_flushE','l_stallF','l_stallD','l_flushE','k_hz'].forEach(id => lite(id,'--stall'));
+      $('bFD').classList.add('hold'); $('bDE').classList.add('hold'); $('tFD').textContent = 'hold'; $('tDE').textContent = 'bubble';
+      cap.unshift(`Load-use stall: ${e.d.ins.text.split(/\s+/)[0]} needs ${e.load.ins.rd} from the load in E. StallF and StallD hold the PC and F/D; FlushE puts a bubble into D/E.`);
+    }
+  }
+  if (s.flush) {
+    ['c_flushD','c_flushE','l_flushD','l_flushE','k_hz'].forEach(id => lite(id,'--flush'));
+    $('bFD').classList.add('clr'); $('bDE').classList.add('clr'); $('tFD').textContent = 'clear'; $('tDE').textContent = 'clear';
+  }
+  if (s.btbChange && mode().opts.flush) {
+    lite('w_bpupd','--good'); lite('l_bpupd','--good'); lite('k_bp','--good');
+    cap.push(s.btbChange.alloc ? 'The BTB gets a new entry for this branch (counter 10).' : `The BTB counter is updated ${bin2(s.btbChange.from)} → ${bin2(s.btbChange.to)}.`);
+  }
+  $('dpCap').textContent = cap.length ? cap.join(' ') : 'Every instruction moves one stage forward. Coloured wires show what each stage is using.';
+}
+
+function render(){
+  const r = run(); cyc = Math.max(1, Math.min(cyc, r.total)); const s = r.snaps[cyc - 1];
+  $('cycNow').textContent = cyc; $('cycTot').textContent = r.total;
+  const sc = $('scrub'); sc.max = r.total; sc.value = cyc;
+  $('first').disabled = $('prev').disabled = cyc === 1; $('next').disabled = $('last').disabled = cyc === r.total;
+  renderProg(s); renderStrip(s); renderDatapath(s); renderEvents(s); renderStats(s); renderBTB(s); renderGrid();
+}
+
+function stop(){ if (timer) { clearInterval(timer); timer = null; $('play').textContent = 'Play'; } }
+function play(){
+  if (timer) return stop();
+  if (cyc >= run().total) cyc = 1;
+  $('play').textContent = 'Pause';
+  timer = setInterval(() => { if (cyc >= run().total) return stop(); cyc++; render(); }, 1100);
+  render();
+}
+function firstInteresting(){ const r = run(); const i = r.snaps.findIndex(s => s.ev.length); return i >= 0 ? i + 1 : 1; }
+
+document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => {
+  stop(); tab = b.dataset.tab;
+  document.querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected', String(x === b)));
+  cyc = 1; renderModes(); render();
+}));
+$('modes').addEventListener('click', e => { const b = e.target.closest('.mode'); if (!b) return; stop(); modeIdx[tab] = +b.dataset.i; cyc = 1; renderModes(); render(); });
+$('first').onclick = () => { stop(); cyc = 1; render(); };
+$('last').onclick = () => { stop(); cyc = run().total; render(); };
+$('prev').onclick = () => { stop(); cyc--; render(); };
+$('next').onclick = () => { stop(); cyc++; render(); };
+$('play').onclick = play;
+$('scrub').oninput = e => { stop(); cyc = +e.target.value; render(); };
+$('grid').addEventListener('click', e => { const th = e.target.closest('th[data-c]'); if (th) { stop(); cyc = +th.dataset.c; render(); } });
+document.addEventListener('keydown', e => {
+  if (e.target.closest('input')) return;
+  if (e.key === 'ArrowRight') { stop(); cyc++; render(); }
+  else if (e.key === 'ArrowLeft') { stop(); cyc--; render(); }
+});
+
+renderModes(); cyc = 1; render();
+</script>
+
+</body></html>
